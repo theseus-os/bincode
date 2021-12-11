@@ -1,5 +1,8 @@
 //! Errors that can be encounting by Encoding and Decoding.
 
+#[cfg(feature = "alloc")]
+use alloc::collections::TryReserveError;
+
 /// Errors that can be encountered by encoding a type
 #[non_exhaustive]
 #[derive(Debug)]
@@ -49,6 +52,13 @@ pub enum EncodeError {
         inner: std::time::SystemTimeError,
         /// The SystemTime that caused the error
         time: std::time::SystemTime,
+    },
+
+    /// bincode failed to allocate enough memory
+    #[cfg(feature = "alloc")]
+    OutOfMemory {
+        /// The inner error
+        inner: TryReserveError,
     },
 
     #[cfg(feature = "serde")]
@@ -168,6 +178,13 @@ pub enum DecodeError {
     #[cfg(feature = "serde")]
     /// A serde-specific error that occurred while decoding.
     Serde(crate::features::serde::DecodeError),
+
+    /// bincode failed to allocate enough memory
+    #[cfg(feature = "alloc")]
+    OutOfMemory {
+        /// The inner error
+        inner: TryReserveError,
+    },
 }
 
 impl core::fmt::Display for DecodeError {
