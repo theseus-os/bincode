@@ -223,25 +223,33 @@ where
 
         let slice = vec.spare_capacity_mut();
 
-        for i in 0..len {
-            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
-            decoder.unclaim_bytes_read(core::mem::size_of::<T>());
+        struct Guard<'a, T> {
+            slice: &'a mut [MaybeUninit<T>],
+            idx: usize,
+        }
 
-            match T::decode(decoder) {
-                Ok(t) => {
-                    slice[i].write(t);
-                }
-                Err(e) => {
-                    unsafe {
-                        // Safety: We have allocated up to `i` entries, and we need to properly drop these
-                        for item in &mut slice[..i] {
-                            core::ptr::drop_in_place(item as *mut MaybeUninit<T> as *mut T);
-                        }
+        impl<'a, T> Drop for Guard<'a, T> {
+            fn drop(&mut self) {
+                unsafe {
+                    for item in &mut self.slice[..self.idx] {
+                        core::ptr::drop_in_place(item as *mut MaybeUninit<T> as *mut T);
                     }
-                    return Err(e);
                 }
             }
         }
+
+        let mut guard = Guard { slice, idx: 0 };
+
+        for _ in 0..len {
+            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
+            decoder.unclaim_bytes_read(core::mem::size_of::<T>());
+
+            let t = T::decode(decoder)?;
+            guard.slice[guard.idx].write(t);
+            guard.idx += 1;
+        }
+        // Don't drop the guard
+        core::mem::forget(guard);
         unsafe {
             // All values are written, we can now set the length of the vec
             vec.set_len(vec.len() + len)
