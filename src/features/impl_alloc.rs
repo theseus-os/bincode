@@ -9,7 +9,6 @@ use alloc::sync::Arc;
 use alloc::{
     borrow::{Cow, ToOwned},
     boxed::Box,
-    collections::*,
     rc::Rc,
     string::String,
     vec::Vec,
@@ -33,7 +32,15 @@ impl enc::write::Writer for VecWriter {
         self.inner
             .try_reserve(bytes.len())
             .map_err(|inner| EncodeError::OutOfMemory { inner })?;
-        self.inner.extend_from_slice(bytes);
+
+        let start = self.inner.len();
+        let target = unsafe {
+            // Safety: We reserved above so we know we can set the length, and we're filling the value right below this
+            self.inner.set_len(start + bytes.len());
+            // Safety: We know we have this slice available
+            self.inner.get_unchecked_mut(start..start + bytes.len())
+        };
+        target.copy_from_slice(bytes);
         Ok(())
     }
 }
@@ -49,147 +56,153 @@ pub fn encode_to_vec<E: enc::Encode, C: Config>(val: E, config: C) -> Result<Vec
     Ok(encoder.into_writer().inner)
 }
 
-impl<T> Decode for BinaryHeap<T>
-where
-    T: Decode + Ord,
-{
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let len = crate::de::decode_slice_len(decoder)?;
-        decoder.claim_container_read::<T>(len)?;
+#[cfg(not(no_global_oom_handling))]
+mod collection_impls {
+    use super::*;
+    use alloc::collections::*;
 
-        let mut map = BinaryHeap::new();
-        // TODO:
-        // map.try_reserve(len).map_err(|inner| DecodeError::OutOfMemory { inner })?;
-        map.reserve(len);
+    impl<T> Decode for BinaryHeap<T>
+    where
+        T: Decode + Ord,
+    {
+        fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+            let len = crate::de::decode_slice_len(decoder)?;
+            decoder.claim_container_read::<T>(len)?;
 
-        for _ in 0..len {
-            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
-            decoder.unclaim_bytes_read(core::mem::size_of::<T>());
+            let mut map = BinaryHeap::new();
+            // TODO:
+            // map.try_reserve(len).map_err(|inner| DecodeError::OutOfMemory { inner })?;
+            map.reserve(len);
 
-            let key = T::decode(decoder)?;
-            map.push(key);
+            for _ in 0..len {
+                // See the documentation on `unclaim_bytes_read` as to why we're doing this here
+                decoder.unclaim_bytes_read(core::mem::size_of::<T>());
+
+                let key = T::decode(decoder)?;
+                map.push(key);
+            }
+            Ok(map)
         }
-        Ok(map)
     }
-}
 
-impl<T> Encode for BinaryHeap<T>
-where
-    T: Encode + Ord,
-{
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        crate::enc::encode_slice_len(encoder, self.len())?;
-        for val in self.iter() {
-            val.encode(encoder)?;
+    impl<T> Encode for BinaryHeap<T>
+    where
+        T: Encode + Ord,
+    {
+        fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+            crate::enc::encode_slice_len(encoder, self.len())?;
+            for val in self.iter() {
+                val.encode(encoder)?;
+            }
+            Ok(())
         }
-        Ok(())
     }
-}
 
-impl<K, V> Decode for BTreeMap<K, V>
-where
-    K: Decode + Ord,
-    V: Decode,
-{
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let len = crate::de::decode_slice_len(decoder)?;
-        decoder.claim_container_read::<(K, V)>(len)?;
+    impl<K, V> Decode for BTreeMap<K, V>
+    where
+        K: Decode + Ord,
+        V: Decode,
+    {
+        fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+            let len = crate::de::decode_slice_len(decoder)?;
+            decoder.claim_container_read::<(K, V)>(len)?;
 
-        let mut map = BTreeMap::new();
-        for _ in 0..len {
-            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
-            decoder.unclaim_bytes_read(core::mem::size_of::<(K, V)>());
+            let mut map = BTreeMap::new();
+            for _ in 0..len {
+                // See the documentation on `unclaim_bytes_read` as to why we're doing this here
+                decoder.unclaim_bytes_read(core::mem::size_of::<(K, V)>());
 
-            let key = K::decode(decoder)?;
-            let value = V::decode(decoder)?;
-            map.insert(key, value);
+                let key = K::decode(decoder)?;
+                let value = V::decode(decoder)?;
+                map.insert(key, value);
+            }
+            Ok(map)
         }
-        Ok(map)
     }
-}
 
-impl<K, V> Encode for BTreeMap<K, V>
-where
-    K: Encode + Ord,
-    V: Encode,
-{
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        crate::enc::encode_slice_len(encoder, self.len())?;
-        for (key, val) in self.iter() {
-            key.encode(encoder)?;
-            val.encode(encoder)?;
+    impl<K, V> Encode for BTreeMap<K, V>
+    where
+        K: Encode + Ord,
+        V: Encode,
+    {
+        fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+            crate::enc::encode_slice_len(encoder, self.len())?;
+            for (key, val) in self.iter() {
+                key.encode(encoder)?;
+                val.encode(encoder)?;
+            }
+            Ok(())
         }
-        Ok(())
     }
-}
 
-impl<T> Decode for BTreeSet<T>
-where
-    T: Decode + Ord,
-{
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let len = crate::de::decode_slice_len(decoder)?;
-        decoder.claim_container_read::<T>(len)?;
+    impl<T> Decode for BTreeSet<T>
+    where
+        T: Decode + Ord,
+    {
+        fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+            let len = crate::de::decode_slice_len(decoder)?;
+            decoder.claim_container_read::<T>(len)?;
 
-        let mut map = BTreeSet::new();
-        for _ in 0..len {
-            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
-            decoder.unclaim_bytes_read(core::mem::size_of::<T>());
+            let mut map = BTreeSet::new();
+            for _ in 0..len {
+                // See the documentation on `unclaim_bytes_read` as to why we're doing this here
+                decoder.unclaim_bytes_read(core::mem::size_of::<T>());
 
-            let key = T::decode(decoder)?;
-            map.insert(key);
+                let key = T::decode(decoder)?;
+                map.insert(key);
+            }
+            Ok(map)
         }
-        Ok(map)
     }
-}
 
-impl<T> Encode for BTreeSet<T>
-where
-    T: Encode + Ord,
-{
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        crate::enc::encode_slice_len(encoder, self.len())?;
-        for item in self.iter() {
-            item.encode(encoder)?;
+    impl<T> Encode for BTreeSet<T>
+    where
+        T: Encode + Ord,
+    {
+        fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+            crate::enc::encode_slice_len(encoder, self.len())?;
+            for item in self.iter() {
+                item.encode(encoder)?;
+            }
+            Ok(())
         }
-        Ok(())
     }
-}
 
-impl<T> Decode for VecDeque<T>
-where
-    T: Decode,
-{
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let len = crate::de::decode_slice_len(decoder)?;
-        decoder.claim_container_read::<T>(len)?;
+    impl<T> Decode for VecDeque<T>
+    where
+        T: Decode,
+    {
+        fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+            let len = crate::de::decode_slice_len(decoder)?;
+            decoder.claim_container_read::<T>(len)?;
 
-        let mut map = VecDeque::new();
-        map.try_reserve(len).map_err(|inner| {
-            DecodeError::OutOfMemory(crate::error::OutOfMemory::TryReserve(inner))
-        })?;
+            let mut map = VecDeque::new();
+            map.try_reserve(len).map_err(|inner| {
+                DecodeError::OutOfMemory(crate::error::OutOfMemory::TryReserve(inner))
+            })?;
 
-        for _ in 0..len {
-            // See the documentation on `unclaim_bytes_read` as to why we're doing this here
-            decoder.unclaim_bytes_read(core::mem::size_of::<T>());
+            for _ in 0..len {
+                // See the documentation on `unclaim_bytes_read` as to why we're doing this here
+                decoder.unclaim_bytes_read(core::mem::size_of::<T>());
 
-            let key = T::decode(decoder)?;
-            map.push_back(key);
+                let key = T::decode(decoder)?;
+                map.push_back(key);
+            }
+            Ok(map)
         }
-        Ok(map)
     }
-}
 
-impl<T> Encode for VecDeque<T>
-where
-    T: Encode,
-{
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        crate::enc::encode_slice_len(encoder, self.len())?;
-        for item in self.iter() {
-            item.encode(encoder)?;
+    impl<T> Encode for VecDeque<T>
+    where
+        T: Encode,
+    {
+        fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+            crate::enc::encode_slice_len(encoder, self.len())?;
+            for item in self.iter() {
+                item.encode(encoder)?;
+            }
+            Ok(())
         }
-        Ok(())
     }
 }
 
@@ -198,6 +211,8 @@ where
     T: Decode,
 {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+        use core::mem::MaybeUninit;
+
         let len = crate::de::decode_slice_len(decoder)?;
         decoder.claim_container_read::<T>(len)?;
 
@@ -206,11 +221,30 @@ where
             DecodeError::OutOfMemory(crate::error::OutOfMemory::TryReserve(inner))
         })?;
 
-        for _ in 0..len {
+        let slice = vec.spare_capacity_mut();
+
+        for i in 0..len {
             // See the documentation on `unclaim_bytes_read` as to why we're doing this here
             decoder.unclaim_bytes_read(core::mem::size_of::<T>());
 
-            vec.push(T::decode(decoder)?);
+            match T::decode(decoder) {
+                Ok(t) => {
+                    slice[i].write(t);
+                }
+                Err(e) => {
+                    unsafe {
+                        // Safety: We have allocated up to `i` entries, and we need to properly drop these
+                        for item in &mut slice[..i] {
+                            core::ptr::drop_in_place(item as *mut MaybeUninit<T> as *mut T);
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        unsafe {
+            // All values are written, we can now set the length of the vec
+            vec.set_len(vec.len() + len)
         }
         Ok(vec)
     }
@@ -248,7 +282,7 @@ where
 {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let t = T::decode(decoder)?;
-        Ok(Box::new(t))
+        Box::try_new(t).map_err(|e| DecodeError::OutOfMemory(crate::error::OutOfMemory::Alloc(e)))
     }
 }
 
