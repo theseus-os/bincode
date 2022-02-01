@@ -23,8 +23,8 @@
         "fail-fast": false,
         "matrix": {
           "rust": [
-            "stable",
-            "beta",
+            # "stable",
+            # "beta",
             "nightly"
             # "1.55.0" TODO: Pick latest stable version when we release 2.0
           ]
@@ -76,7 +76,8 @@
       "strategy": {
         "matrix": {
           "rust": [
-            "stable",
+            # "stable",
+            "nightly",
             # "1.55.0" TODO: Pick latest stable version when we release 2.0
           ],
           "features": [
@@ -160,11 +161,11 @@ fi",
           "uses": "actions-rs/toolchain@v1",
           "with": {
             "profile": "minimal",
-            "toolchain": "stable",
+            "toolchain": "nightly",
             "override": true,
             "components": "rustfmt, clippy"
           },
-          "name": "Install Rust stable"
+          "name": "Install Rust nightly"
         },
         {
           "uses": "actions-rs/cargo@v1",
