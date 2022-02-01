@@ -34,13 +34,18 @@ impl enc::write::Writer for VecWriter {
             .map_err(|inner| EncodeError::OutOfMemory { inner })?;
 
         let start = self.inner.len();
-        let target = unsafe {
-            // Safety: We reserved above so we know we can set the length, and we're filling the value right below this
+
+        // Get a slice of `&mut [MaybeUninit<u8>]` of the remaining capacity
+        let remaining = &mut self.inner.spare_capacity_mut()[..bytes.len()];
+        for (i, b) in bytes.iter().copied().enumerate() {
+            // TODO: is there a better way to copy from `&mut [MaybeUninit<u8>]` to `&[u8]`?
+            remaining[i].write(b);
+        }
+
+        unsafe {
+            // Safety: We reserved enough bytes, and the bytes have values written to them
             self.inner.set_len(start + bytes.len());
-            // Safety: We know we have this slice available
-            self.inner.get_unchecked_mut(start..start + bytes.len())
-        };
-        target.copy_from_slice(bytes);
+        }
         Ok(())
     }
 }
@@ -319,13 +324,10 @@ where
             struct Guard<'a, T> {
                 result: &'a mut Box<[MaybeUninit<T>]>,
                 initialized: usize,
-                max: usize,
             }
 
             impl<T> Drop for Guard<'_, T> {
                 fn drop(&mut self) {
-                    debug_assert!(self.initialized <= self.max);
-
                     // SAFETY: this slice will contain only initialized objects.
                     unsafe {
                         let slice = &mut *(self.result.get_unchecked_mut(..self.initialized)
@@ -339,10 +341,9 @@ where
             let mut guard = Guard {
                 result: &mut result,
                 initialized: 0,
-                max: len,
             };
 
-            while guard.initialized < guard.max {
+            while guard.initialized < len {
                 decoder.unclaim_bytes_read(core::mem::size_of::<T>());
                 let t = T::decode(decoder)?;
 
