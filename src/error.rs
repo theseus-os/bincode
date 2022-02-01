@@ -2,6 +2,8 @@
 
 #[cfg(feature = "alloc")]
 use alloc::collections::TryReserveError;
+#[cfg(feature = "alloc")]
+use core::alloc::AllocError;
 
 /// Errors that can be encountered by encoding a type
 #[non_exhaustive]
@@ -181,10 +183,16 @@ pub enum DecodeError {
 
     /// bincode failed to allocate enough memory
     #[cfg(feature = "alloc")]
-    OutOfMemory {
-        /// The inner error
-        inner: TryReserveError,
-    },
+    OutOfMemory(OutOfMemory),
+}
+
+/// A wrapper to make all the out of memory errors consistent
+#[cfg(feature = "alloc")]
+#[derive(Debug, PartialEq)]
+#[allow(missing_docs)]
+pub enum OutOfMemory {
+    TryReserve(TryReserveError),
+    Alloc(AllocError),
 }
 
 impl core::fmt::Display for DecodeError {

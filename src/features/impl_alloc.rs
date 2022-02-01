@@ -1,5 +1,5 @@
 use crate::{
-    de::{Decode, Decoder},
+    de::{decode_slice_len, Decode, Decoder},
     enc::{self, Encode, Encoder},
     error::{DecodeError, EncodeError},
     Config,
@@ -165,8 +165,9 @@ where
         decoder.claim_container_read::<T>(len)?;
 
         let mut map = VecDeque::new();
-        map.try_reserve(len)
-            .map_err(|inner| DecodeError::OutOfMemory { inner })?;
+        map.try_reserve(len).map_err(|inner| {
+            DecodeError::OutOfMemory(crate::error::OutOfMemory::TryReserve(inner))
+        })?;
 
         for _ in 0..len {
             // See the documentation on `unclaim_bytes_read` as to why we're doing this here
@@ -201,8 +202,9 @@ where
         decoder.claim_container_read::<T>(len)?;
 
         let mut vec = Vec::new();
-        vec.try_reserve(len)
-            .map_err(|inner| DecodeError::OutOfMemory { inner })?;
+        vec.try_reserve(len).map_err(|inner| {
+            DecodeError::OutOfMemory(crate::error::OutOfMemory::TryReserve(inner))
+        })?;
 
         for _ in 0..len {
             // See the documentation on `unclaim_bytes_read` as to why we're doing this here
@@ -264,8 +266,49 @@ where
     T: Decode,
 {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let vec = Vec::decode(decoder)?;
-        Ok(vec.into_boxed_slice())
+        let len = decode_slice_len(decoder)?;
+        unsafe {
+            use core::mem::MaybeUninit;
+            let mut result = Box::try_new_uninit_slice(len)
+                .map_err(|e| DecodeError::OutOfMemory(crate::error::OutOfMemory::Alloc(e)))?;
+
+            struct Guard<'a, T> {
+                result: &'a mut Box<[MaybeUninit<T>]>,
+                initialized: usize,
+                max: usize,
+            }
+
+            impl<T> Drop for Guard<'_, T> {
+                fn drop(&mut self) {
+                    debug_assert!(self.initialized <= self.max);
+
+                    // SAFETY: this slice will contain only initialized objects.
+                    unsafe {
+                        let slice = &mut *(self.result.get_unchecked_mut(..self.initialized)
+                            as *mut [MaybeUninit<T>]
+                            as *mut [T]);
+                        core::ptr::drop_in_place(slice);
+                    }
+                }
+            }
+
+            let mut guard = Guard {
+                result: &mut result,
+                initialized: 0,
+                max: len,
+            };
+
+            while guard.initialized < guard.max {
+                let t = T::decode(decoder)?;
+
+                guard.result.get_unchecked_mut(guard.initialized).write(t);
+                guard.initialized += 1;
+            }
+
+            core::mem::forget(guard);
+            let (raw, alloc) = Box::into_raw_with_allocator(result);
+            Ok(Box::from_raw_in(raw as *mut [T], alloc))
+        }
     }
 }
 
@@ -322,7 +365,7 @@ where
 {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let t = T::decode(decoder)?;
-        Ok(Rc::new(t))
+        Rc::try_new(t).map_err(|e| DecodeError::OutOfMemory(crate::error::OutOfMemory::Alloc(e)))
     }
 }
 
@@ -342,7 +385,7 @@ where
 {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let t = T::decode(decoder)?;
-        Ok(Arc::new(t))
+        Arc::try_new(t).map_err(|e| DecodeError::OutOfMemory(crate::error::OutOfMemory::Alloc(e)))
     }
 }
 

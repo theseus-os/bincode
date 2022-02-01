@@ -384,8 +384,9 @@ where
         decoder.claim_container_read::<(K, V)>(len)?;
 
         let mut map = HashMap::new();
-        map.try_reserve(len)
-            .map_err(|inner| DecodeError::OutOfMemory { inner })?;
+        map.try_reserve(len).map_err(|inner| {
+            DecodeError::OutOfMemory(crate::error::OutOfMemory::TryReserve(inner))
+        })?;
 
         for _ in 0..len {
             // See the documentation on `unclaim_bytes_read` as to why we're doing this here
