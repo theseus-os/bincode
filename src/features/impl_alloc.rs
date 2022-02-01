@@ -301,6 +301,8 @@ where
 {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
         let len = decode_slice_len(decoder)?;
+        decoder.claim_container_read::<T>(len)?;
+
         unsafe {
             use core::mem::MaybeUninit;
             let mut result = Box::try_new_uninit_slice(len)
@@ -333,6 +335,7 @@ where
             };
 
             while guard.initialized < guard.max {
+                decoder.unclaim_bytes_read(core::mem::size_of::<T>());
                 let t = T::decode(decoder)?;
 
                 guard.result.get_unchecked_mut(guard.initialized).write(t);
