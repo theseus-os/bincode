@@ -34,9 +34,9 @@ derive = ["bincode_derive"]
 #   std = ["alloc", "serde?/std"]
 #   alloc = ["serde?/alloc"]
 # now we have to do this hack:
-serde = ["serde_incl/std", "std", "serde_alloc"] # std
-serde_alloc = ["serde_incl/alloc", "alloc"] # alloc
-serde_no_std = ["serde_incl"] # no_std
+serde_std = ["serde_incl/std", "std", "serde_alloc"] # std
+serde_alloc = ["serde_incl/alloc", "alloc", "serde"] # alloc
+serde = ["serde_incl"] # no_std
 
 [dependencies]
 bincode_derive = { path = "derive", version = "2.0.0-rc.1", optional = true }
